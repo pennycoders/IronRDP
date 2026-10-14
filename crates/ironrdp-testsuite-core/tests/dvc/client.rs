@@ -1,8 +1,8 @@
 use ironrdp_core::{Decode as _, ReadCursor, encode_vec, impl_as_any};
 use ironrdp_dvc::ironrdp_pdu::{PduResult, pdu_other_err};
 use ironrdp_dvc::pdu::{
-    CapabilitiesRequestPdu, CapsVersion, ClosePdu, CreateRequestPdu, CreationStatus, DataPdu, DrdynvcClientPdu,
-    DrdynvcDataPdu, DrdynvcServerPdu, SoftSyncChannelList, SoftSyncRequestPdu, SoftSyncTunnelType,
+    CapabilitiesRequestPdu, CapsVersion, ClosePdu, CreateRequestPdu, CreationStatus, DataFirstPdu, DataPdu,
+    DrdynvcClientPdu, DrdynvcDataPdu, DrdynvcServerPdu, SoftSyncChannelList, SoftSyncRequestPdu, SoftSyncTunnelType,
 };
 use ironrdp_dvc::{DrdynvcClient, DvcClientProcessor, DvcMessage, DvcMessageBatch, DvcProcessor};
 use ironrdp_svc::SvcMessage;
@@ -364,4 +364,98 @@ fn tunnel_refuses_a_create_request_before_the_capabilities_exchange() {
         .process_tunnel(SoftSyncTunnelType::RELIABLE_UDP, &create)
         .expect("Create Request on the tunnel should be processed after the capabilities exchange");
     assert_eq!(client.tunnel_for_channel(16), Some(SoftSyncTunnelType::RELIABLE_UDP));
+}
+
+fn server_pdu(pdu: DrdynvcServerPdu) -> Vec<u8> {
+    encode_vec(&pdu).expect("server PDU should encode")
+}
+
+fn data(channel_id: u32, payload: &[u8]) -> Vec<u8> {
+    server_pdu(DrdynvcServerPdu::Data(DrdynvcDataPdu::Data(DataPdu::new(
+        channel_id,
+        payload.to_vec(),
+    ))))
+}
+
+#[test]
+fn data_for_a_refused_channel_is_dropped() {
+    let mut client = DrdynvcClient::new().with_dynamic_channel(RecordedDvc::default());
+    exchange_capabilities(&mut client);
+
+    // FreeRDP's RDPSND server opens AUDIO_PLAYBACK_DVC and sends its formats right away,
+    // before it has read the client's answer.
+    let responses = client
+        .process(&server_pdu(DrdynvcServerPdu::Create(CreateRequestPdu::new(
+            3,
+            "AUDIO_PLAYBACK_DVC".to_owned(),
+        ))))
+        .expect("Create Request should be answered");
+    let [response] = responses.as_slice() else {
+        panic!("expected exactly one Create Response");
+    };
+    let DrdynvcClientPdu::Create(response) = decode_client_pdu(response) else {
+        panic!("expected a Create Response");
+    };
+    assert_eq!(response.creation_status(), CreationStatus::NO_LISTENER);
+
+    assert!(
+        client
+            .process(&data(3, b"server audio formats"))
+            .expect("data for a refused channel should not end the session")
+            .is_empty()
+    );
+
+    // Channels the client did open keep working.
+    client
+        .process(&server_pdu(DrdynvcServerPdu::Create(CreateRequestPdu::new(
+            4,
+            "recorded".to_owned(),
+        ))))
+        .expect("Create Request should be answered");
+    client.process(&data(4, b"after")).expect("data should route");
+    let channel = client
+        .get_dvc_by_channel_id::<RecordedDvc>(4)
+        .expect("recorded channel should be open");
+    assert_eq!(channel.processor().received, vec![b"after".to_vec()]);
+}
+
+#[test]
+fn fragmented_data_for_an_unknown_channel_is_dropped() {
+    let mut client = DrdynvcClient::new();
+    exchange_capabilities(&mut client);
+
+    let first = server_pdu(DrdynvcServerPdu::Data(DrdynvcDataPdu::DataFirst(DataFirstPdu::new(
+        9,
+        8,
+        b"abcd".to_vec(),
+    ))));
+    assert!(client.process(&first).expect("DataFirst should be dropped").is_empty());
+    assert!(
+        client
+            .process(&data(9, b"efgh"))
+            .expect("Data should be dropped")
+            .is_empty()
+    );
+}
+
+#[test]
+fn data_after_a_close_is_dropped() {
+    let mut client = DrdynvcClient::new().with_dynamic_channel(RecordedDvc::default());
+    exchange_capabilities(&mut client);
+    client
+        .process(&server_pdu(DrdynvcServerPdu::Create(CreateRequestPdu::new(
+            5,
+            "recorded".to_owned(),
+        ))))
+        .expect("Create Request should be answered");
+    client
+        .process(&server_pdu(DrdynvcServerPdu::Close(ClosePdu::new(5))))
+        .expect("Close should be answered");
+
+    assert!(
+        client
+            .process(&data(5, b"late"))
+            .expect("data after a close should not end the session")
+            .is_empty()
+    );
 }
