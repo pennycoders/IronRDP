@@ -16,6 +16,7 @@ use ironrdp_pdu::rdp::client_info::CompressionType;
 use ironrdp_pdu::rdp::headers::ShareDataPdu;
 use ironrdp_pdu::rdp::multitransport::{MultitransportRequestPdu, MultitransportResponsePdu};
 use ironrdp_pdu::rdp::refresh_rectangle::RefreshRectanglePdu;
+use ironrdp_pdu::rdp::server_error_info::ErrorInfo;
 use ironrdp_pdu::rdp::session_info::ServerAutoReconnect;
 use ironrdp_pdu::rdp::suppress_output::SuppressOutputPdu;
 use ironrdp_pdu::slow_path::{self, GraphicsUpdateType};
@@ -874,7 +875,7 @@ impl TryFrom<x224::ProcessorOutput> for ActiveStageOutput {
                         mcs::DisconnectReason::UserRequested => GracefulDisconnectReason::UserInitiated,
                         other => GracefulDisconnectReason::Other(other.description().to_owned()),
                     },
-                    x224::DisconnectDescription::ErrorInfo(info) => GracefulDisconnectReason::Other(info.description()),
+                    x224::DisconnectDescription::ErrorInfo(info) => GracefulDisconnectReason::ErrorInfo(info),
                 };
 
                 Ok(Self::Terminate(desc))
@@ -901,6 +902,8 @@ impl TryFrom<x224::ProcessorOutput> for ActiveStageOutput {
 pub enum GracefulDisconnectReason {
     UserInitiated,
     ServerInitiated,
+    /// The server explained the disconnection with a Set Error Info PDU.
+    ErrorInfo(ErrorInfo),
     Other(String),
 }
 
@@ -909,6 +912,7 @@ impl GracefulDisconnectReason {
         match self {
             GracefulDisconnectReason::UserInitiated => "user initiated disconnect".to_owned(),
             GracefulDisconnectReason::ServerInitiated => "server initiated disconnect".to_owned(),
+            GracefulDisconnectReason::ErrorInfo(info) => info.description(),
             GracefulDisconnectReason::Other(description) => description.clone(),
         }
     }
@@ -1078,6 +1082,47 @@ mod tests {
     use ironrdp_pdu::input::mouse::PointerFlags;
     use ironrdp_pdu::pointer::{ColorPointerAttribute, Point16, PointerAttribute, PointerUpdateData};
     use ironrdp_rdpei::pdu::{PenEventPdu, RdpInputProtocolVersion, RdpeiPdu, ScReadyPdu, TouchEventPdu};
+
+    fn terminate_reason(desc: x224::DisconnectDescription) -> GracefulDisconnectReason {
+        match ActiveStageOutput::try_from(x224::ProcessorOutput::Disconnect(desc)) {
+            Ok(ActiveStageOutput::Terminate(reason)) => reason,
+            other => panic!("expected Terminate, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn error_info_disconnect_keeps_the_code() {
+        use ironrdp_pdu::rdp::server_error_info::ProtocolIndependentCode;
+
+        let info = ErrorInfo::ProtocolIndependentCode(ProtocolIndependentCode::DisconnectedByOtherconnection);
+        let reason = terminate_reason(x224::DisconnectDescription::ErrorInfo(info));
+
+        assert!(matches!(reason, GracefulDisconnectReason::ErrorInfo(i) if i == info));
+        assert_eq!(reason.description(), info.description());
+        assert_eq!(reason.to_string(), info.description());
+    }
+
+    #[test]
+    fn mcs_disconnects_map_to_their_reasons() {
+        assert!(matches!(
+            terminate_reason(x224::DisconnectDescription::McsDisconnect(
+                mcs::DisconnectReason::ProviderInitiated
+            )),
+            GracefulDisconnectReason::ServerInitiated
+        ));
+        assert!(matches!(
+            terminate_reason(x224::DisconnectDescription::McsDisconnect(
+                mcs::DisconnectReason::UserRequested
+            )),
+            GracefulDisconnectReason::UserInitiated
+        ));
+        assert!(matches!(
+            terminate_reason(x224::DisconnectDescription::McsDisconnect(
+                mcs::DisconnectReason::ChannelPurged
+            )),
+            GracefulDisconnectReason::Other(description) if description == mcs::DisconnectReason::ChannelPurged.description()
+        ));
+    }
 
     #[test]
     fn full_redraw_prefers_suppress_output_toggle_when_supported() {

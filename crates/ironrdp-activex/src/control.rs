@@ -1008,6 +1008,11 @@ impl DisconnectInfo {
                 description: "The RDP server ended the session.",
                 ..Self::no_info()
             },
+            GracefulDisconnectReason::ErrorInfo(info) => Self {
+                extended_reason: i32::try_from(info.as_u32()).unwrap_or(EXTENDED_DISCONNECT_REASON_NO_INFO),
+                description: "The RDP server ended the session.",
+                ..Self::no_info()
+            },
             GracefulDisconnectReason::Other(_) => Self {
                 description: "The RDP session ended with an unclassified server reason.",
                 ..Self::no_info()

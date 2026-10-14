@@ -538,3 +538,14 @@ fn bitmap_cache_v3_round_trip_does_not_panic() {
     let encoded = encode_vec(&decoded).expect("re-encode must not panic");
     assert_eq!(encoded, input, "round-trip must reproduce the original bytes");
 }
+
+#[test]
+fn server_error_info_code_round_trips() {
+    use ironrdp_pdu::rdp::server_error_info::ServerSetErrorInfoPdu;
+
+    for code in [0x0000_0005u32, 0x0000_0100, 0x0000_0400, 0x0000_10C9] {
+        let pdu: ServerSetErrorInfoPdu = decode(&code.to_le_bytes()).unwrap();
+        assert_eq!(pdu.0.as_u32(), code);
+        assert_eq!(encode_vec(&pdu).unwrap(), code.to_le_bytes());
+    }
+}

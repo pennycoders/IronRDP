@@ -69,7 +69,8 @@ impl ErrorInfo {
         }
     }
 
-    fn as_u32(self) -> u32 {
+    /// The code as sent on the wire.
+    pub fn as_u32(self) -> u32 {
         match self {
             Self::ProtocolIndependentCode(c) => c.as_u32(),
             Self::ProtocolIndependentLicensingCode(c) => c.as_u32(),
