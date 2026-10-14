@@ -1,6 +1,7 @@
 # IronRDP RDPSND
 
-RDPSND static channel for audio output implemented as described in [MS-RDPEA].
+RDPSND static channel for audio output implemented as described in [MS-RDPEA], also usable over the
+`AUDIO_PLAYBACK_DVC` dynamic virtual channel (`dvc` module).
 
 This crate is part of the [IronRDP] project.
 

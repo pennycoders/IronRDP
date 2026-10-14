@@ -1,4 +1,5 @@
 mod client;
+mod dvc;
 mod server;
 
 use std::borrow::Cow;
